@@ -1,0 +1,10 @@
+# TUI- cargo config - override parent kernel config
+# Work in progress
+
+[build]
+target = "x86_64-unknown-linux-gnu"
+target-dir = "target"
+
+[target.x86_64-unknown-linux-gnu]
+# Override any parent rustflags
+rustflags = []
