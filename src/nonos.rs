@@ -173,7 +173,7 @@ impl NonosManager {
         }
     }
 
-    pub async fn launch_qemu_with_monitoring(&self, target: &str, tx: mpsc::Sender<String>) -> Result<()> {
+    pub async fn launch_qemu_with_monitoring(&self, _target: &str, tx: mpsc::Sender<String>) -> Result<()> {
         if !Self::check_command("qemu-system-x86_64").await {
             return Err(anyhow::anyhow!("QEMU not available"));
         }
@@ -287,7 +287,7 @@ impl NonosManager {
         })
     }
 
-    async fn check_build_artifacts(&self) -> Result<BuildArtifacts> {
+    pub async fn check_build_artifacts(&self) -> Result<BuildArtifacts> {
         let target_dir = self.kernel_path.join("target");
         let debug_dir = target_dir.join("x86_64-nonos").join("debug");
         let release_dir = target_dir.join("x86_64-nonos").join("release");
