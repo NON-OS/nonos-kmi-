@@ -10,7 +10,7 @@ use tokio::{
     process::{Child, ChildStdin, Command},
     sync::{mpsc, Mutex},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug)]
 pub struct GdbManager {
