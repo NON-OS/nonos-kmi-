@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
@@ -80,6 +80,15 @@ impl QemuManager {
             self.stop_kernel().await?;
         }
 
+        // Send console notification about launch attempt
+        let launch_log = KernelConsole {
+            timestamp: SystemTime::now(),
+            level: LogLevel::Info,
+            message: format!("Launching kernel from path: {}", kernel_path.display()),
+            module: Some("qemu".to_string()),
+        };
+        let _ = self.console_tx.send(launch_log);
+        
         let mut cmd = Command::new("qemu-system-x86_64");
         cmd.arg("-machine").arg("q35");
         cmd.arg("-m").arg(&self.config.memory);
@@ -212,7 +221,7 @@ impl BuildMonitor {
         }
     }
 
-    pub async fn queue_build(&mut self, target: &str, kernel_path: &Path) -> Result<()> {
+    pub async fn queue_build(&mut self, target: &str, kernel_path: &Path, signing_key: Option<&std::path::Path>) -> Result<()> {
         if self.active_builds.len() >= self.parallel_limit {
             return Err(anyhow::anyhow!("Build queue full"));
         }
@@ -222,6 +231,11 @@ impl BuildMonitor {
             .current_dir(kernel_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+            
+        // Set NONOS_SIGNING_KEY environment variable if provided
+        if let Some(key_path) = signing_key {
+            cmd.env("NONOS_SIGNING_KEY", key_path);
+        }
 
         let mut child = cmd.spawn().context("Failed to spawn build process")?;
 
@@ -264,6 +278,73 @@ impl BuildMonitor {
 
     pub fn get_build_history(&self) -> &[BuildResult] {
         &self.build_history
+    }
+
+    pub async fn poll_builds(&mut self) -> Result<Vec<BuildResult>> {
+        let mut completed_builds = Vec::new();
+        let mut finished_targets = Vec::new();
+
+        for (target, process) in &mut self.active_builds {
+            // Check if process has finished
+            match process.process.try_wait() {
+                Ok(Some(exit_status)) => {
+                    // Process finished, collect output
+                    let mut output_lines = Vec::new();
+                    while let Ok(line) = process.output_rx.try_recv() {
+                        output_lines.push(line);
+                    }
+                    
+                    let result = BuildResult {
+                        target: target.clone(),
+                        success: exit_status.success(),
+                        duration: process.started.elapsed().unwrap_or_default(),
+                        output: output_lines.join("\n"),
+                        timestamp: SystemTime::now(),
+                    };
+                    
+                    completed_builds.push(result.clone());
+                    self.build_history.push(result);
+                    finished_targets.push(target.clone());
+                }
+                Ok(None) => {
+                    // Process still running, do nothing
+                }
+                Err(_) => {
+                    // Error checking status, assume failed
+                    let result = BuildResult {
+                        target: target.clone(),
+                        success: false,
+                        duration: process.started.elapsed().unwrap_or_default(),
+                        output: "Failed to check process status".to_string(),
+                        timestamp: SystemTime::now(),
+                    };
+                    
+                    completed_builds.push(result.clone());
+                    self.build_history.push(result);
+                    finished_targets.push(target.clone());
+                }
+            }
+        }
+
+        // Remove finished builds from active builds
+        for target in finished_targets {
+            self.active_builds.remove(&target);
+        }
+
+        Ok(completed_builds)
+    }
+
+    pub async fn get_build_output(&mut self, target: &str) -> Option<Vec<String>> {
+        if let Some(process) = self.active_builds.get_mut(target) {
+            let mut output_lines = Vec::new();
+            while let Ok(line) = process.output_rx.try_recv() {
+                output_lines.push(line);
+            }
+            if !output_lines.is_empty() {
+                return Some(output_lines);
+            }
+        }
+        None
     }
 }
 
